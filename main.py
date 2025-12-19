@@ -110,9 +110,6 @@ async def process_excel(file: UploadFile = File(...)):
         column_names = df.columns.tolist()
         print(f"✓ Extracted {len(column_names)} columns: {column_names}", file=sys.stderr)
         
-
-        df_cleaned.columns = df_cleaned.columns.str.capitalize()
-
         # Step 5: Clean the data
         print("Step 5: Cleaning data...", file=sys.stderr)
         original_row_count = len(df)
@@ -122,6 +119,8 @@ async def process_excel(file: UploadFile = File(...)):
         df_cleaned = df.drop_duplicates()
         duplicates_removed = original_row_count - len(df_cleaned)
         print(f"  Removed {duplicates_removed} duplicate rows", file=sys.stderr)
+        
+        df_cleaned.columns = df_cleaned.columns.str.capitalize()
         
         # Remove rows with all NaN values
         before_nan = len(df_cleaned)
