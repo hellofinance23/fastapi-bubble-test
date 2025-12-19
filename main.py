@@ -33,23 +33,19 @@ def say_hello_to(name: str):
 async def excel_to_json(file: Optional[UploadFile] = File(None)):
     try:
         if file is None:
-            return {
-                "success": False,
-                "error": "No file received (Bubble init call)"
-            }
+            print("No file received")
+            return {"success": False, "error": "No file received (Bubble init call)"}
 
+        print(f"Received file: {file.filename}, content_type: {file.content_type}")
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
 
-        return {
-            "success": True,
-            "rows": len(df),
-            "data": df.to_dict(orient="records")
-        }
+        # Try reading with pandas
+        df = pd.read_excel(io.BytesIO(contents))
+        print(f"DataFrame loaded with {len(df)} rows")
+
+        return {"success": True, "rows": len(df), "data": df.to_dict(orient="records")}
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
+        print("Exception occurred:", e)
+        traceback.print_exc()
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
