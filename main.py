@@ -33,19 +33,34 @@ def say_hello_to(name: str):
 async def excel_to_json(file: Optional[UploadFile] = File(None)):
     try:
         if file is None:
-            print("No file received")
             return {"success": False, "error": "No file received (Bubble init call)"}
 
+        # Log file info
         print(f"Received file: {file.filename}, content_type: {file.content_type}")
+
+        # Check for empty file
         contents = await file.read()
+        if not contents:
+            return {"success": False, "error": "File is empty"}
 
-        # Try reading with pandas
-        df = pd.read_excel(io.BytesIO(contents))
-        print(f"DataFrame loaded with {len(df)} rows")
+        # Check supported Excel types
+        if file.content_type not in [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel"
+        ]:
+            return {"success": False, "error": f"Unsupported file type: {file.content_type}"}
 
+        # Try reading the Excel file
+        try:
+            df = pd.read_excel(io.BytesIO(contents))
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read Excel: {str(e)}"}
+
+        # Return clean JSON
         return {"success": True, "rows": len(df), "data": df.to_dict(orient="records")}
 
     except Exception as e:
-        print("Exception occurred:", e)
+        # Catch everything else
+        print("Unexpected exception:", e)
         traceback.print_exc()
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+        return {"success": False, "error": f"Unexpected error: {str(e)}", "traceback": traceback.format_exc()}
