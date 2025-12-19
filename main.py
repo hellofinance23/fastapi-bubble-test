@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
 from typing import Optional
+import traceback
 
 app = FastAPI()
 
