@@ -2,6 +2,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
+from typing import Optional
 
 app = FastAPI()
 
@@ -26,41 +27,28 @@ def say_hello():
 def say_hello_to(name: str):
     return {"message": f"Hello {name}!"}
 
+
 @app.post("/excel-to-json")
-async def excel_to_json(file: UploadFile = File(...)):
-    """
-    Upload an Excel file and get back JSON data
-    """
+async def excel_to_json(file: Optional[UploadFile] = File(None)):
     try:
-        # Validate file type
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(
-                status_code=400, 
-                detail="Only Excel files (.xlsx, .xls) are allowed"
-            )
-        
-        # Read the uploaded file
+        if file is None:
+            return {
+                "success": False,
+                "error": "No file received (Bubble init call)"
+            }
+
         contents = await file.read()
-        
-        # Parse Excel into DataFrame
         df = pd.read_excel(io.BytesIO(contents))
-        
-        # Convert DataFrame to JSON-friendly format
-        # Option 1: Records format (list of objects)
-        data = df.to_dict(orient='records')
-        
-        # Return JSON response
+
         return {
             "success": True,
-            "filename": file.filename,
-            "row_count": len(df),
-            "column_count": len(df.columns),
-            "columns": list(df.columns),
-            "data": data
+            "rows": len(df),
+            "data": df.to_dict(orient="records")
         }
-    
+
     except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error processing file: {str(e)}"
-        )
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
