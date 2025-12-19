@@ -110,6 +110,9 @@ async def process_excel(file: UploadFile = File(...)):
         column_names = df.columns.tolist()
         print(f"✓ Extracted {len(column_names)} columns: {column_names}", file=sys.stderr)
         
+
+        df_cleaned.columns = df_cleaned.columns.str.capitalize()
+
         # Step 5: Clean the data
         print("Step 5: Cleaning data...", file=sys.stderr)
         original_row_count = len(df)
