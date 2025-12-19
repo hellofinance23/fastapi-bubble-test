@@ -121,7 +121,7 @@ async def process_excel(file: UploadFile = File(...)):
         print(f"  Removed {duplicates_removed} duplicate rows", file=sys.stderr)
         
         df_cleaned.columns = df_cleaned.columns.str.capitalize()
-        
+
         # Remove rows with all NaN values
         before_nan = len(df_cleaned)
         df_cleaned = df_cleaned.dropna(how='all')
@@ -131,6 +131,13 @@ async def process_excel(file: UploadFile = File(...)):
         # Strip whitespace from column names
         df_cleaned.columns = df_cleaned.columns.str.strip()
         print(f"  Stripped whitespace from column names", file=sys.stderr)
+
+
+        # 🆕 Step 5a: Append "CHANGED" to all column names
+        print("Step 5a: Appending 'CHANGED' to column names...", file=sys.stderr)
+        df_cleaned.columns = [f"{col}_CHANGED" for col in df_cleaned.columns]
+        new_column_names = df_cleaned.columns.tolist()
+        print(f"  New columns: {new_column_names}", file=sys.stderr)
         
         # Strip whitespace from string columns
         string_columns = df_cleaned.select_dtypes(include=['object']).columns
