@@ -4,6 +4,8 @@ import pandas as pd
 import io
 from typing import Optional
 import traceback
+import requests
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -29,38 +31,29 @@ def say_hello_to(name: str):
     return {"message": f"Hello {name}!"}
 
 
-@app.post("/excel-to-json")
-async def excel_to_json(file: Optional[UploadFile] = File(None)):
+class FileUrl(BaseModel):
+    file_url: str
+
+@app.post("/excel-url-to-json")
+async def excel_url_to_json(payload: FileUrl):
     try:
-        if file is None:
-            return {"success": False, "error": "No file received (Bubble init call)"}
+        url = payload.file_url
+        print(f"Received file URL: {url}")
 
-        # Log file info
-        print(f"Received file: {file.filename}, content_type: {file.content_type}")
+        # Download the file
+        response = requests.get(url)
+        if response.status_code != 200:
+            return {"success": False, "error": f"Failed to download file: status {response.status_code}"}
 
-        # Check for empty file
-        contents = await file.read()
-        if not contents:
-            return {"success": False, "error": "File is empty"}
-
-        # Check supported Excel types
-        if file.content_type not in [
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-excel"
-        ]:
-            return {"success": False, "error": f"Unsupported file type: {file.content_type}"}
-
-        # Try reading the Excel file
+        # Read Excel from bytes
         try:
-            df = pd.read_excel(io.BytesIO(contents))
+            df = pd.read_excel(io.BytesIO(response.content))
         except Exception as e:
             return {"success": False, "error": f"Failed to read Excel: {str(e)}"}
 
-        # Return clean JSON
         return {"success": True, "rows": len(df), "data": df.to_dict(orient="records")}
 
     except Exception as e:
-        # Catch everything else
         print("Unexpected exception:", e)
         traceback.print_exc()
         return {"success": False, "error": f"Unexpected error: {str(e)}", "traceback": traceback.format_exc()}
