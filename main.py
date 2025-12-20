@@ -1,352 +1,231 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
-from typing import List, Dict, Any
-import traceback
+import os
+import uuid
+from pathlib import Path
+import tempfile
 from datetime import datetime
 import sys
 
 app = FastAPI()
 
-# Enable CORS for Bubble.io to make requests
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Bubble.io domain
+    allow_origins=["*"],  # In production: ["https://tucourse.com"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
-# Helper function to create detailed error responses
-def create_error_response(error: Exception, context: str) -> Dict[str, Any]:
-    """Create a detailed error response for debugging"""
-    error_details = {
-        "success": False,
-        "error_type": type(error).__name__,
-        "error_message": str(error),
-        "context": context,
-        "timestamp": datetime.now().isoformat(),
-        "traceback": traceback.format_exc()
-    }
-    print(f"ERROR [{context}]: {error_details}", file=sys.stderr)
-    return error_details
+# Create temp directory for storing files
+TEMP_DIR = Path(tempfile.gettempdir()) / "excel_processor"
+TEMP_DIR.mkdir(exist_ok=True)
+
+# Get Railway's public URL from environment
+RAILWAY_PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "localhost:8000")
+if not RAILWAY_PUBLIC_URL.startswith("http"):
+    RAILWAY_PUBLIC_URL = f"https://{RAILWAY_PUBLIC_URL}"
 
 @app.get("/")
-async def root():
-    return {
-        "message": "Excel Processor API is running",
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "endpoints": {
-            "/process-excel": "POST - Process Excel file and return cleaned version",
-            "/process-excel-debug": "POST - Process with detailed JSON response",
-            "/health": "GET - Health check"
-        }
-    }
+def index():
+    return {"Hello": "World"}
+
+@app.get("/cat")
+def cat():
+    return FileResponse("files/dog.jpg")
 
 @app.post("/process-excel")
 async def process_excel(file: UploadFile = File(...)):
     """
-    Receives an Excel file, extracts column names, and returns a cleaned Excel file
+    Process Excel file and return a download URL instead of the file
     """
-    print(f"=== Starting Excel Processing ===", file=sys.stderr)
-    print(f"Received file: {file.filename}", file=sys.stderr)
-    print(f"Content type: {file.content_type}", file=sys.stderr)
+    print(f"=== Processing Excel File ===", file=sys.stderr)
+    print(f"Filename: {file.filename}", file=sys.stderr)
+    print(f"Content-Type: {file.content_type}", file=sys.stderr)
     
     try:
-        # Step 1: Validate file type
-        print("Step 1: Validating file type...", file=sys.stderr)
+        # Validate file type
         if not file.filename.endswith(('.xlsx', '.xls')):
-            error_msg = f"Invalid file type. Received: {file.filename}"
-            print(f"ERROR: {error_msg}", file=sys.stderr)
             raise HTTPException(
-                status_code=400, 
-                detail={
-                    "success": False,
-                    "error": "Invalid file type",
-                    "message": "File must be an Excel file (.xlsx or .xls)",
-                    "received_filename": file.filename
-                }
+                status_code=400,
+                detail="Invalid file type. Must be .xlsx or .xls"
             )
-        print("✓ File type validated", file=sys.stderr)
         
-        # Step 2: Read the uploaded file into memory
-        print("Step 2: Reading file contents...", file=sys.stderr)
+        # Read the file
+        print("Reading file contents...", file=sys.stderr)
         contents = await file.read()
-        file_size = len(contents)
-        print(f"✓ File read successfully. Size: {file_size} bytes", file=sys.stderr)
+        file_size_mb = len(contents) / (1024 * 1024)
+        print(f"File size: {file_size_mb:.2f} MB", file=sys.stderr)
         
-        if file_size == 0:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "success": False,
-                    "error": "Empty file",
-                    "message": "The uploaded file is empty"
-                }
-            )
+        # Load into pandas
+        print("Loading Excel...", file=sys.stderr)
+        df = pd.read_excel(io.BytesIO(contents))
+        print(f"Loaded: {len(df)} rows, {len(df.columns)} columns", file=sys.stderr)
         
-        # Step 3: Load Excel file into pandas DataFrame
-        print("Step 3: Loading Excel into pandas...", file=sys.stderr)
-        try:
-            df = pd.read_excel(io.BytesIO(contents))
-            print(f"✓ Excel loaded. Shape: {df.shape}", file=sys.stderr)
-        except Exception as e:
-            print(f"ERROR loading Excel: {str(e)}", file=sys.stderr)
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "success": False,
-                    "error": "Excel parsing error",
-                    "message": f"Could not parse Excel file: {str(e)}",
-                    "file_size": file_size
-                }
-            )
-        
-        # Step 4: Extract column names
-        print("Step 4: Extracting column names...", file=sys.stderr)
-        column_names = df.columns.tolist()
-        print(f"✓ Extracted {len(column_names)} columns: {column_names}", file=sys.stderr)
-        
-        # Step 5: Clean the data
-        print("Step 5: Cleaning data...", file=sys.stderr)
+        # Extract original columns
+        original_columns = df.columns.tolist()
         original_row_count = len(df)
-        print(f"  Original rows: {original_row_count}", file=sys.stderr)
         
-        # Remove duplicate rows
+        # Clean the data
+        print("Cleaning data...", file=sys.stderr)
         df_cleaned = df.drop_duplicates()
         duplicates_removed = original_row_count - len(df_cleaned)
-        print(f"  Removed {duplicates_removed} duplicate rows", file=sys.stderr)
         
-        df_cleaned.columns = df_cleaned.columns.str.capitalize()
-
-        # Remove rows with all NaN values
-        before_nan = len(df_cleaned)
         df_cleaned = df_cleaned.dropna(how='all')
-        empty_rows_removed = before_nan - len(df_cleaned)
-        print(f"  Removed {empty_rows_removed} empty rows", file=sys.stderr)
+        empty_rows_removed = (original_row_count - duplicates_removed) - len(df_cleaned)
         
         # Strip whitespace from column names
         df_cleaned.columns = df_cleaned.columns.str.strip()
-        print(f"  Stripped whitespace from column names", file=sys.stderr)
-
-
-        # 🆕 Step 5a: Append "CHANGED" to all column names
-        print("Step 5a: Appending 'CHANGED' to column names...", file=sys.stderr)
+        
+        # Add "_CHANGED" to column names
         df_cleaned.columns = [f"{col}_CHANGED" for col in df_cleaned.columns]
-        new_column_names = df_cleaned.columns.tolist()
-        print(f"  New columns: {new_column_names}", file=sys.stderr)
+        new_columns = df_cleaned.columns.tolist()
         
         # Strip whitespace from string columns
-        string_columns = df_cleaned.select_dtypes(include=['object']).columns
-        for col in string_columns:
+        for col in df_cleaned.select_dtypes(include=['object']).columns:
             try:
                 df_cleaned[col] = df_cleaned[col].str.strip()
             except:
-                pass  # Skip if column can't be stripped
-        print(f"  Stripped whitespace from {len(string_columns)} string columns", file=sys.stderr)
+                pass
         
         final_row_count = len(df_cleaned)
-        print(f"✓ Cleaning complete. Final rows: {final_row_count}", file=sys.stderr)
+        print(f"Cleaning complete: {final_row_count} rows", file=sys.stderr)
         
-        # Step 6: Create output Excel file in memory
-        print("Step 6: Creating output Excel file...", file=sys.stderr)
-        output = io.BytesIO()
-        try:
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_cleaned.to_excel(writer, index=False, sheet_name='Cleaned Data')
-            output.seek(0)
-            output_size = len(output.getvalue())
-            print(f"✓ Output file created. Size: {output_size} bytes", file=sys.stderr)
-        except Exception as e:
-            print(f"ERROR creating output file: {str(e)}", file=sys.stderr)
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "success": False,
-                    "error": "Output generation error",
-                    "message": f"Could not create output Excel file: {str(e)}"
-                }
-            )
+        # Generate unique file ID
+        file_id = str(uuid.uuid4())
+        output_filename = f"cleaned_{file_id}.xlsx"
+        output_path = TEMP_DIR / output_filename
         
-        # Step 7: Return the cleaned Excel file
-        print("Step 7: Returning file to client...", file=sys.stderr)
+        # Save the cleaned Excel file
+        print(f"Saving to: {output_path}", file=sys.stderr)
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            df_cleaned.to_excel(writer, index=False, sheet_name='Cleaned Data')
+        
+        output_size_mb = output_path.stat().st_size / (1024 * 1024)
+        print(f"Output file created: {output_size_mb:.2f} MB", file=sys.stderr)
+        
+        # Create download URL
+        download_url = f"{RAILWAY_PUBLIC_URL}/download/{file_id}"
+        
+        print(f"Download URL: {download_url}", file=sys.stderr)
         print("=== Processing Complete ===", file=sys.stderr)
         
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f"attachment; filename=cleaned_{file.filename}",
-                "X-Column-Names": ",".join(column_names),
-                "X-Original-Rows": str(original_row_count),
-                "X-Final-Rows": str(final_row_count),
-                "X-Duplicates-Removed": str(duplicates_removed),
-                "X-Empty-Rows-Removed": str(empty_rows_removed)
-            }
-        )
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-    except Exception as e:
-        # Catch any unexpected errors
-        error_response = create_error_response(e, "Unexpected error in process_excel")
-        print(f"FATAL ERROR: {error_response}", file=sys.stderr)
-        raise HTTPException(
-            status_code=500,
-            detail=error_response
-        )
-
-@app.post("/process-excel-debug")
-async def process_excel_debug(file: UploadFile = File(...)):
-    """
-    Process Excel file and return detailed JSON response instead of file
-    Useful for debugging - shows all processing steps and results
-    """
-    debug_log = []
-    
-    def log(message: str, level: str = "INFO"):
-        """Helper to log messages"""
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "level": level,
-            "message": message
-        }
-        debug_log.append(log_entry)
-        print(f"[{level}] {message}", file=sys.stderr)
-    
-    try:
-        log(f"Received file: {file.filename}")
-        log(f"Content type: {file.content_type}")
-        
-        # Validate file type
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "Invalid file type",
-                    "received_filename": file.filename,
-                    "logs": debug_log
-                }
-            )
-        log("File type validated")
-        
-        # Read file
-        contents = await file.read()
-        file_size = len(contents)
-        log(f"File read successfully. Size: {file_size} bytes")
-        
-        if file_size == 0:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "Empty file",
-                    "logs": debug_log
-                }
-            )
-        
-        # Load Excel
-        try:
-            df = pd.read_excel(io.BytesIO(contents))
-            log(f"Excel loaded. Shape: {df.shape} (rows: {df.shape[0]}, columns: {df.shape[1]})")
-        except Exception as e:
-            log(f"ERROR loading Excel: {str(e)}", "ERROR")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "Excel parsing error",
-                    "error_message": str(e),
-                    "logs": debug_log
-                }
-            )
-        
-        # Extract column info
-        column_names = df.columns.tolist()
-        column_types = df.dtypes.astype(str).to_dict()
-        log(f"Extracted {len(column_names)} columns")
-        
-        # Get data preview (first 5 rows)
-        data_preview = df.head(5).to_dict('records')
-        
-        # Clean data
-        original_row_count = len(df)
-        log(f"Starting cleaning. Original rows: {original_row_count}")
-        
-        df_cleaned = df.drop_duplicates()
-        duplicates_removed = original_row_count - len(df_cleaned)
-        log(f"Removed {duplicates_removed} duplicate rows")
-        
-        before_nan = len(df_cleaned)
-        df_cleaned = df_cleaned.dropna(how='all')
-        empty_rows_removed = before_nan - len(df_cleaned)
-        log(f"Removed {empty_rows_removed} empty rows")
-        
-        df_cleaned.columns = df_cleaned.columns.str.strip()
-        log("Stripped whitespace from column names")
-        
-        final_row_count = len(df_cleaned)
-        log(f"Cleaning complete. Final rows: {final_row_count}")
-        
-        # Return comprehensive debug information
-        return JSONResponse(
-            content={
-                "success": True,
-                "filename": file.filename,
-                "file_size_bytes": file_size,
-                "original_row_count": original_row_count,
-                "final_row_count": final_row_count,
+        # Return JSON with download URL
+        return JSONResponse(content={
+            "success": True,
+            "download_url": download_url,
+            "file_id": file_id,
+            "original_filename": file.filename,
+            "processed_filename": output_filename,
+            "stats": {
+                "original_rows": original_row_count,
+                "final_rows": final_row_count,
                 "duplicates_removed": duplicates_removed,
                 "empty_rows_removed": empty_rows_removed,
-                "column_count": len(column_names),
-                "columns": column_names,
-                "column_types": column_types,
-                "data_preview": data_preview,
-                "logs": debug_log,
-                "message": "File processed successfully. Use /process-excel endpoint to download the cleaned file."
+                "original_columns": original_columns,
+                "new_columns": new_columns,
+                "input_size_mb": round(file_size_mb, 2),
+                "output_size_mb": round(output_size_mb, 2)
+            },
+            "expires_in": "24 hours"
+        })
+        
+    except Exception as e:
+        print(f"ERROR: {str(e)}", file=sys.stderr)
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/download/{file_id}")
+async def download_file(file_id: str):
+    """
+    Download the processed Excel file by ID
+    """
+    print(f"Download request for file_id: {file_id}", file=sys.stderr)
+    
+    try:
+        # Find the file
+        file_path = TEMP_DIR / f"cleaned_{file_id}.xlsx"
+        
+        if not file_path.exists():
+            print(f"File not found: {file_path}", file=sys.stderr)
+            raise HTTPException(
+                status_code=404,
+                detail="File not found or expired. Files are kept for 24 hours."
+            )
+        
+        print(f"Serving file: {file_path}", file=sys.stderr)
+        
+        # Return the file
+        return FileResponse(
+            path=file_path,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=f"cleaned_{file_id}.xlsx",
+            headers={
+                "Content-Disposition": f"attachment; filename=cleaned_data.xlsx"
             }
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        log(f"FATAL ERROR: {str(e)}", "ERROR")
-        log(f"Traceback: {traceback.format_exc()}", "ERROR")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": "Unexpected error",
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-                "traceback": traceback.format_exc(),
-                "logs": debug_log
-            }
-        )
+        print(f"ERROR serving file: {str(e)}", file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/download/{file_id}")
+async def delete_file(file_id: str):
+    """
+    Manually delete a processed file
+    """
+    try:
+        file_path = TEMP_DIR / f"cleaned_{file_id}.xlsx"
+        
+        if file_path.exists():
+            file_path.unlink()
+            return {"success": True, "message": "File deleted"}
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Cleanup old files automatically
+from apscheduler.schedulers.background import BackgroundScheduler
+import time
+
+def cleanup_old_files():
+    """Remove files older than 24 hours"""
+    print("Running cleanup task...", file=sys.stderr)
+    current_time = time.time()
+    deleted_count = 0
+    
+    for file_path in TEMP_DIR.glob("cleaned_*.xlsx"):
+        file_age_hours = (current_time - file_path.stat().st_mtime) / 3600
+        
+        if file_age_hours > 24:  # 24 hours
+            try:
+                file_path.unlink()
+                deleted_count += 1
+                print(f"Deleted old file: {file_path.name}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error deleting {file_path.name}: {e}", file=sys.stderr)
+    
+    print(f"Cleanup complete. Deleted {deleted_count} files.", file=sys.stderr)
+
+# Schedule cleanup every 6 hours
+scheduler = BackgroundScheduler()
+scheduler.add_job(cleanup_old_files, 'interval', hours=6)
+scheduler.start()
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint with system info"""
+def health():
     return {
         "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "python_version": sys.version,
-        "pandas_version": pd.__version__
+        "temp_dir": str(TEMP_DIR),
+        "files_count": len(list(TEMP_DIR.glob("cleaned_*.xlsx")))
     }
-
-# Error handler for validation errors
-@app.exception_handler(422)
-async def validation_exception_handler(request, exc):
-    print(f"Validation Error: {exc}", file=sys.stderr)
-    return JSONResponse(
-        status_code=422,
-        content={
-            "success": False,
-            "error": "Validation error",
-            "message": "The request format is invalid",
-            "details": str(exc)
-        }
-    )
