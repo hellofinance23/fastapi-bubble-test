@@ -5,17 +5,6 @@ openpyxl==3.1.2
 python-multipart==0.0.6
 requests==2.31.0
 APScheduler==3.10.4
-polars==0.20.3
-
-
-# Fast Excel engines
-python-calamine==0.2.0
-xlsx2csv==0.8.2
+xlsxwriter==3.1.9
 pyxlsb==1.0.10
 xlrd==2.0.1
-
-# For faster writing
-xlsxwriter==3.1.9
-
-# Memory monitoring (optional)
-psutil==5.9.8

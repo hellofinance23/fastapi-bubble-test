@@ -11,7 +11,8 @@ from datetime import datetime
 import sys
 import requests
 from typing import Dict
-import polars as pl
+import time
+import gc
 
 app = FastAPI()
 
@@ -36,25 +37,30 @@ if not RAILWAY_PUBLIC_URL.startswith("http"):
 
 @app.get("/")
 def index():
-    return {"Hello": "World", "version": "2.0"}
+    return {
+        "message": "Excel/CSV Processor API",
+        "version": "3.0",
+        "supported_formats": ["CSV", "Excel (.xlsx, .xls)"]
+    }
 
 @app.get("/cat")
 def cat():
     return FileResponse("files/dog.jpg")
 
-@app.post("/process-excel-from-url")
-async def process_excel_from_url(data: Dict = Body(...)):
+@app.post("/process-file-from-url")
+async def process_file_from_url(data: Dict = Body(...)):
     """
-    Process Excel file from a URL (Bubble file URL, Better Uploader URL, etc.)
+    Process CSV or Excel file from a URL
+    Automatically detects format and uses optimal loading method
     
     Expected JSON body:
     {
         "file_url": "https://...",
-        "filename": "data.xlsx"
+        "filename": "data.xlsx" or "data.csv"
     }
     """
     print("=" * 50, file=sys.stderr)
-    print("Processing Excel from URL", file=sys.stderr)
+    print("Processing File from URL (CSV/Excel)", file=sys.stderr)
     print("=" * 50, file=sys.stderr)
     
     try:
@@ -72,10 +78,11 @@ async def process_excel_from_url(data: Dict = Body(...)):
         print(f"Filename: {filename}", file=sys.stderr)
         
         # Step 1: Download file from URL
-        print("Step 1: Downloading file from URL...", file=sys.stderr)
+        print("Step 1: Downloading file...", file=sys.stderr)
+        download_start = time.time()
         
         try:
-            response = requests.get(file_url, stream=True, timeout=300)
+            response = requests.get(file_url, stream=True, timeout=600)
             response.raise_for_status()
             file_content = response.content
         except requests.exceptions.RequestException as e:
@@ -86,107 +93,193 @@ async def process_excel_from_url(data: Dict = Body(...)):
             )
         
         file_size_mb = len(file_content) / (1024 * 1024)
-        print(f"✓ Downloaded {file_size_mb:.2f} MB", file=sys.stderr)
+        download_time = time.time() - download_start
+        print(f"✓ Downloaded {file_size_mb:.2f} MB in {download_time:.1f}s", file=sys.stderr)
         
         # Step 2: Validate file type
         print("Step 2: Validating file type...", file=sys.stderr)
-        if not filename.endswith(('.xlsx', '.xls')):
+        
+        is_csv = filename.lower().endswith('.csv')
+        is_excel = filename.lower().endswith(('.xlsx', '.xls', '.xlsb'))
+        
+        if not (is_csv or is_excel):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid file type. Must be .xlsx or .xls"
+                detail="Invalid file type. Must be .csv, .xlsx, .xls, or .xlsb"
             )
-        print("✓ File type validated", file=sys.stderr)
         
-       
-
-        # Step 3: Load Excel with Polars (ultra-fast)
-        print("Step 3: Loading Excel with Polars (ultra-fast)...", file=sys.stderr)
+        file_type = "CSV" if is_csv else "Excel"
+        print(f"✓ File type validated: {file_type}", file=sys.stderr)
+        
+        # Step 3: Save to temp file
+        print("Step 3: Saving to temporary file...", file=sys.stderr)
+        temp_input_path = TEMP_DIR / f"temp_input_{uuid.uuid4()}_{filename}"
+        
+        with open(temp_input_path, 'wb') as f:
+            f.write(file_content)
+        
+        print(f"✓ Saved to: {temp_input_path.name}", file=sys.stderr)
+        
+        # Free memory
+        del file_content
+        gc.collect()
+        
+        # Step 4: Load file (CSV or Excel)
+        print(f"Step 4: Loading {file_type}...", file=sys.stderr)
         load_start = time.time()
-        print(load_start)
-
+        
         try:
-            # Save to temp file first
-            temp_input_path = TEMP_DIR / f"temp_input_{uuid.uuid4()}.xlsx"
-            with open(temp_input_path, 'wb') as f:
-                f.write(file_content)
+            if is_csv:
+                # FAST PATH: Load CSV
+                print("  Using CSV reader (fast)...", file=sys.stderr)
+                df = pd.read_csv(
+                    temp_input_path,
+                    dtype=str,  # Read as strings for consistency
+                    encoding='utf-8',
+                    low_memory=False,
+                    on_bad_lines='skip'  # Skip problematic rows
+                )
+                engine_used = "CSV (fast)"
             
-            # Load with Polars
-            df_polars = pl.read_excel(temp_input_path)
+            elif filename.lower().endswith('.xlsx'):
+                # Excel .xlsx format
+                print("  Using openpyxl engine...", file=sys.stderr)
+                df = pd.read_excel(
+                    temp_input_path,
+                    engine='openpyxl',
+                    dtype=str  # Read as strings for consistency
+                )
+                engine_used = "Excel (openpyxl)"
+            
+            elif filename.lower().endswith('.xls'):
+                # Old Excel .xls format
+                print("  Using xlrd engine...", file=sys.stderr)
+                df = pd.read_excel(
+                    temp_input_path,
+                    engine='xlrd',
+                    dtype=str
+                )
+                engine_used = "Excel (xlrd)"
+            
+            elif filename.lower().endswith('.xlsb'):
+                # Binary Excel format
+                print("  Using pyxlsb engine...", file=sys.stderr)
+                df = pd.read_excel(
+                    temp_input_path,
+                    engine='pyxlsb',
+                    dtype=str
+                )
+                engine_used = "Excel (pyxlsb)"
             
             load_time = time.time() - load_start
-            print(f"✓ Loaded {len(df_polars):,} rows in {load_time:.1f}s with Polars", 
-                file=sys.stderr)
             
-            # Convert to pandas for compatibility with rest of code
-            df = df_polars.to_pandas()
+            print(f"✓ Loaded {len(df):,} rows × {len(df.columns)} cols", file=sys.stderr)
+            print(f"  Engine: {engine_used}", file=sys.stderr)
+            print(f"  Load time: {load_time:.1f}s", file=sys.stderr)
             
-            # Clean up
-            temp_input_path.unlink()
-            del df_polars
-            import gc
-            gc.collect()
-
-        except Exception as e:
-            print(f"ERROR: {str(e)}", file=sys.stderr)
-            raise HTTPException(status_code=400, detail=str(e))
+            if load_time > 0:
+                print(f"  Speed: {file_size_mb/load_time:.1f} MB/s", file=sys.stderr)
         
-        # Step 4: Extract original columns
+        except Exception as e:
+            print(f"ERROR loading file: {str(e)}", file=sys.stderr)
+            import traceback
+            print(traceback.format_exc(), file=sys.stderr)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to parse file: {str(e)}"
+            )
+        
+        finally:
+            # Always clean up temp file
+            try:
+                temp_input_path.unlink()
+                print("✓ Cleaned up temp input file", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: couldn't delete temp file: {e}", file=sys.stderr)
+        
+        # Step 5: Extract original columns
         original_columns = df.columns.tolist()
         original_row_count = len(df)
-        print(f"Original columns: {original_columns}", file=sys.stderr)
+        print(f"Original: {original_row_count:,} rows, {len(original_columns)} columns", 
+              file=sys.stderr)
         
-        # Step 5: Clean the data
-        print("Step 4: Cleaning data...", file=sys.stderr)
+        # Step 6: Clean the data
+        print("Step 5: Cleaning data...", file=sys.stderr)
+        clean_start = time.time()
         
         # Remove duplicates
+        print("  Removing duplicates...", file=sys.stderr)
         df_cleaned = df.drop_duplicates()
         duplicates_removed = original_row_count - len(df_cleaned)
-        print(f"  Removed {duplicates_removed} duplicate rows", file=sys.stderr)
+        print(f"  ✓ Removed {duplicates_removed:,} duplicate rows", file=sys.stderr)
+        
+        # Free memory
+        del df
+        gc.collect()
         
         # Remove empty rows
+        print("  Removing empty rows...", file=sys.stderr)
         before_nan = len(df_cleaned)
         df_cleaned = df_cleaned.dropna(how='all')
         empty_rows_removed = before_nan - len(df_cleaned)
-        print(f"  Removed {empty_rows_removed} empty rows", file=sys.stderr)
+        print(f"  ✓ Removed {empty_rows_removed:,} empty rows", file=sys.stderr)
         
-        # Strip whitespace from column names
+        # Clean column names
+        print("  Cleaning column names...", file=sys.stderr)
         df_cleaned.columns = df_cleaned.columns.str.strip()
-        
-        # Add "_CHANGED" to column names
         df_cleaned.columns = [f"{col}_CHANGED" for col in df_cleaned.columns]
         new_columns = df_cleaned.columns.tolist()
-        print(f"  New columns: {new_columns}", file=sys.stderr)
+        print(f"  ✓ Renamed {len(new_columns)} columns", file=sys.stderr)
         
-        # Strip whitespace from string columns
-        string_columns = df_cleaned.select_dtypes(include=['object']).columns
-        for col in string_columns:
+        # Strip whitespace from all cells
+        print("  Cleaning cell values...", file=sys.stderr)
+        for col in df_cleaned.columns:
             try:
                 df_cleaned[col] = df_cleaned[col].str.strip()
             except:
                 pass
-        print(f"  Stripped whitespace from {len(string_columns)} string columns", file=sys.stderr)
+        print(f"  ✓ Cleaned cell values", file=sys.stderr)
         
         final_row_count = len(df_cleaned)
-        print(f"✓ Cleaning complete: {final_row_count} rows", file=sys.stderr)
+        clean_time = time.time() - clean_start
+        print(f"✓ Cleaning complete in {clean_time:.1f}s → {final_row_count:,} final rows", 
+              file=sys.stderr)
         
-        # Step 6: Save the cleaned Excel file
-        print("Step 5: Saving cleaned file...", file=sys.stderr)
+        # Step 7: Save the cleaned file as Excel
+        print("Step 6: Saving cleaned file as Excel...", file=sys.stderr)
+        save_start = time.time()
+        
         file_id = str(uuid.uuid4())
         output_filename = f"cleaned_{file_id}.xlsx"
         output_path = TEMP_DIR / output_filename
         
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        print(f"  Output: {output_filename}", file=sys.stderr)
+        
+        # Use xlsxwriter (faster for writing)
+        with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
             df_cleaned.to_excel(writer, index=False, sheet_name='Cleaned Data')
         
+        save_time = time.time() - save_start
         output_size_mb = output_path.stat().st_size / (1024 * 1024)
-        print(f"✓ Output file created: {output_size_mb:.2f} MB", file=sys.stderr)
+        print(f"✓ Saved {output_size_mb:.2f} MB in {save_time:.1f}s", file=sys.stderr)
         
-        # Step 7: Create download URL
+        # Free memory
+        del df_cleaned
+        gc.collect()
+        
+        # Step 8: Create download URL
         download_url = f"{RAILWAY_PUBLIC_URL}/download/{file_id}"
         print(f"Download URL: {download_url}", file=sys.stderr)
         
+        total_time = download_time + load_time + clean_time + save_time
+        
         print("=" * 50, file=sys.stderr)
-        print("Processing Complete!", file=sys.stderr)
+        print(f"✅ COMPLETED in {total_time:.1f}s", file=sys.stderr)
+        print(f"  Input format:  {file_type}", file=sys.stderr)
+        print(f"  Download:      {download_time:.1f}s", file=sys.stderr)
+        print(f"  Load:          {load_time:.1f}s", file=sys.stderr)
+        print(f"  Clean:         {clean_time:.1f}s", file=sys.stderr)
+        print(f"  Save:          {save_time:.1f}s", file=sys.stderr)
         print("=" * 50, file=sys.stderr)
         
         # Return JSON response
@@ -196,17 +289,24 @@ async def process_excel_from_url(data: Dict = Body(...)):
             "file_id": file_id,
             "original_filename": filename,
             "processed_filename": output_filename,
+            "input_format": file_type,
             "stats": {
                 "original_rows": original_row_count,
                 "final_rows": final_row_count,
                 "duplicates_removed": duplicates_removed,
                 "empty_rows_removed": empty_rows_removed,
-                "original_columns": original_columns,
-                "new_columns": new_columns,
+                "original_columns": len(original_columns),
                 "input_size_mb": round(file_size_mb, 2),
-                "output_size_mb": round(output_size_mb, 2)
+                "output_size_mb": round(output_size_mb, 2),
+                "timings": {
+                    "download_seconds": round(download_time, 1),
+                    "load_seconds": round(load_time, 1),
+                    "clean_seconds": round(clean_time, 1),
+                    "save_seconds": round(save_time, 1),
+                    "total_seconds": round(total_time, 1)
+                },
+                "engine_used": engine_used
             },
-            "processing_time": "completed",
             "expires_in": "24 hours"
         })
         
@@ -220,6 +320,14 @@ async def process_excel_from_url(data: Dict = Body(...)):
             status_code=500,
             detail=f"Processing error: {str(e)}"
         )
+
+# Keep backward compatibility with old endpoint name
+@app.post("/process-excel-from-url")
+async def process_excel_from_url(data: Dict = Body(...)):
+    """
+    Legacy endpoint - redirects to new endpoint
+    """
+    return await process_file_from_url(data)
 
 @app.get("/download/{file_id}")
 async def download_file(file_id: str):
@@ -243,7 +351,7 @@ async def download_file(file_id: str):
         return FileResponse(
             path=file_path,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=f"cleaned_data.xlsx",
+            filename="cleaned_data.xlsx",
             headers={
                 "Content-Disposition": "attachment; filename=cleaned_data.xlsx"
             }
@@ -257,7 +365,6 @@ async def download_file(file_id: str):
 
 # Cleanup old files
 from apscheduler.schedulers.background import BackgroundScheduler
-import time
 
 def cleanup_old_files():
     """Remove files older than 24 hours"""
@@ -276,7 +383,23 @@ def cleanup_old_files():
             except Exception as e:
                 print(f"Error deleting {file_path.name}: {e}", file=sys.stderr)
     
-    print(f"Cleanup complete. Deleted {deleted_count} files.", file=sys.stderr)
+    # Also cleanup temp input files
+    for file_path in TEMP_DIR.glob("temp_input_*.xlsx"):
+        try:
+            file_path.unlink()
+            deleted_count += 1
+        except:
+            pass
+    
+    for file_path in TEMP_DIR.glob("temp_input_*.csv"):
+        try:
+            file_path.unlink()
+            deleted_count += 1
+        except:
+            pass
+    
+    if deleted_count > 0:
+        print(f"Cleanup complete. Deleted {deleted_count} files.", file=sys.stderr)
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(cleanup_old_files, 'interval', hours=6)
@@ -286,8 +409,13 @@ scheduler.start()
 def health():
     return {
         "status": "healthy",
-        "version": "2.0",
-        "endpoint": "/process-excel-from-url",
+        "version": "3.0",
+        "supported_formats": ["CSV", "Excel (.xlsx, .xls, .xlsb)"],
+        "endpoints": {
+            "/process-file-from-url": "POST - Process CSV or Excel file",
+            "/process-excel-from-url": "POST - Legacy endpoint (same as above)",
+            "/download/{file_id}": "GET - Download processed file"
+        },
         "temp_dir": str(TEMP_DIR),
         "files_count": len(list(TEMP_DIR.glob("cleaned_*.xlsx")))
     }
