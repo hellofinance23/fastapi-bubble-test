@@ -110,7 +110,8 @@ class FileLoader:
                     encoding=encoding,
                     low_memory=False,
                     on_bad_lines='skip',
-                    encoding_errors='replace'
+                    encoding_errors='replace',
+                    skip_blank_lines=True  # Skip empty rows before loading
                 )
                 successful_encoding = encoding
                 print(f"  ✓ Success with {encoding}", file=sys.stderr)
@@ -154,7 +155,8 @@ class FileLoader:
             df = pd.read_excel(
                 file_path,
                 engine='openpyxl',
-                dtype=str
+                dtype=str,
+                skip_blank_lines=True  # Skip empty rows before loading
             )
             engine_used = "Excel (openpyxl)"
 
@@ -163,7 +165,8 @@ class FileLoader:
             df = pd.read_excel(
                 file_path,
                 engine='xlrd',
-                dtype=str
+                dtype=str,
+                skip_blank_lines=True  # Skip empty rows before loading
             )
             engine_used = "Excel (xlrd)"
 
@@ -172,7 +175,8 @@ class FileLoader:
             df = pd.read_excel(
                 file_path,
                 engine='pyxlsb',
-                dtype=str
+                dtype=str,
+                skip_blank_lines=True  # Skip empty rows before loading
             )
             engine_used = "Excel (pyxlsb)"
 
