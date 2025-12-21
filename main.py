@@ -11,6 +11,7 @@ from datetime import datetime
 import sys
 import requests
 from typing import Dict
+import polars as pl
 
 app = FastAPI()
 
@@ -96,17 +97,37 @@ async def process_excel_from_url(data: Dict = Body(...)):
             )
         print("✓ File type validated", file=sys.stderr)
         
-        # Step 3: Load Excel into pandas
-        print("Step 3: Loading Excel into pandas...", file=sys.stderr)
+       
+
+        # Step 3: Load Excel with Polars (ultra-fast)
+        print("Step 3: Loading Excel with Polars (ultra-fast)...", file=sys.stderr)
+        load_start = time.time()
+
         try:
-            df = pd.read_excel(io.BytesIO(file_content))
-            print(f"✓ Loaded: {len(df)} rows, {len(df.columns)} columns", file=sys.stderr)
+            # Save to temp file first
+            temp_input_path = TEMP_DIR / f"temp_input_{uuid.uuid4()}.xlsx"
+            with open(temp_input_path, 'wb') as f:
+                f.write(file_content)
+            
+            # Load with Polars
+            df_polars = pl.read_excel(temp_input_path)
+            
+            load_time = time.time() - load_start
+            print(f"✓ Loaded {len(df_polars):,} rows in {load_time:.1f}s with Polars", 
+                file=sys.stderr)
+            
+            # Convert to pandas for compatibility with rest of code
+            df = df_polars.to_pandas()
+            
+            # Clean up
+            temp_input_path.unlink()
+            del df_polars
+            import gc
+            gc.collect()
+
         except Exception as e:
-            print(f"ERROR parsing Excel: {str(e)}", file=sys.stderr)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to parse Excel file: {str(e)}"
-            )
+            print(f"ERROR: {str(e)}", file=sys.stderr)
+            raise HTTPException(status_code=400, detail=str(e))
         
         # Step 4: Extract original columns
         original_columns = df.columns.tolist()
