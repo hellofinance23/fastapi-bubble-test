@@ -13,6 +13,8 @@ import requests
 from typing import Dict
 import time
 import gc
+import chardet  # For encoding detection
+
 
 app = FastAPI()
 
@@ -130,16 +132,63 @@ async def process_file_from_url(data: Dict = Body(...)):
         
         try:
             if is_csv:
-                # FAST PATH: Load CSV
-                print("  Using CSV reader (fast)...", file=sys.stderr)
-                df = pd.read_csv(
-                    temp_input_path,
-                    dtype=str,  # Read as strings for consistency
-                    encoding='utf-8',
-                    low_memory=False,
-                    on_bad_lines='skip'  # Skip problematic rows
-                )
-                engine_used = "CSV (fast)"
+                # SMART CSV LOADING with encoding detection
+                print("  Detecting CSV encoding...", file=sys.stderr)
+                
+                # Read sample to detect encoding
+                with open(temp_input_path, 'rb') as f:
+                    raw_data = f.read(100000)  # Read first 100KB
+                    detection = chardet.detect(raw_data)
+                    detected_encoding = detection['encoding']
+                    confidence = detection['confidence']
+                
+                print(f"  Detected: {detected_encoding} (confidence: {confidence:.0%})", 
+                    file=sys.stderr)
+                
+                # Try multiple encodings
+                encodings_to_try = [
+                    detected_encoding,
+                    'utf-8',
+                    'latin-1',
+                    'iso-8859-1',
+                    'cp1252',
+                    'windows-1252',
+                    'utf-16'
+                ]
+                
+                # Remove None and duplicates
+                encodings_to_try = list(dict.fromkeys([e for e in encodings_to_try if e]))
+                
+                df = None
+                successful_encoding = None
+                last_error = None
+                
+                for encoding in encodings_to_try:
+                    try:
+                        print(f"  Trying: {encoding}...", file=sys.stderr)
+                        df = pd.read_csv(
+                            temp_input_path,
+                            dtype=str,
+                            encoding=encoding,
+                            low_memory=False,
+                            on_bad_lines='skip',
+                            encoding_errors='replace'
+                        )
+                        successful_encoding = encoding
+                        print(f"  ✓ Success with {encoding}", file=sys.stderr)
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        print(f"  ✗ Failed: {str(e)[:80]}", file=sys.stderr)
+                        continue
+                
+                if df is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Could not decode CSV. Detected: {detected_encoding}, Error: {last_error}"
+                    )
+                
+                engine_used = f"CSV ({successful_encoding})"
             
             elif filename.lower().endswith('.xlsx'):
                 # Excel .xlsx format
