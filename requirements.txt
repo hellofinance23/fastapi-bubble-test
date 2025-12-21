@@ -5,6 +5,8 @@ openpyxl==3.1.2
 python-multipart==0.0.6
 requests==2.31.0
 APScheduler==3.10.4
+polars==0.20.3
+
 
 # Fast Excel engines
 python-calamine==0.2.0

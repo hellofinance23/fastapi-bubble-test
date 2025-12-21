@@ -102,6 +102,7 @@ async def process_excel_from_url(data: Dict = Body(...)):
         # Step 3: Load Excel with Polars (ultra-fast)
         print("Step 3: Loading Excel with Polars (ultra-fast)...", file=sys.stderr)
         load_start = time.time()
+        print(load_start)
 
         try:
             # Save to temp file first
