@@ -302,10 +302,9 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             preview_rows = min(20, total_rows)
             df_preview = df.head(preview_rows)
 
-            # Convert DataFrame to JSON-friendly format
-            # Using orient='records' converts to list of dictionaries
-            preview_data = df_preview.to_dict(orient='records')
+            # Convert DataFrame to the requested format
             columns = df_preview.columns.tolist()
+            rows = df_preview.values.tolist()  # Convert to list of lists
 
             print(f"✓ Returning preview of {preview_rows} rows", file=sys.stderr)
             print("=" * 50, file=sys.stderr)
@@ -323,8 +322,8 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
                 "total_rows": total_rows,
                 "total_columns": total_columns,
                 "preview_rows": preview_rows,
-                "columns": columns,
-                "data": preview_data,  # List of dictionaries, one per row
+                "columns": columns,  # Array of column names
+                "rows": rows,  # Array of arrays (each row is an array of values)
                 "engine_used": engine_used
             })
 
