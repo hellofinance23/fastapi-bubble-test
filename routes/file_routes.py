@@ -250,6 +250,100 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             print(f"ERROR serving file: {str(e)}", file=sys.stderr)
             raise HTTPException(status_code=500, detail=str(e))
 
+    @router.post("/preview-file-from-url")
+    async def preview_file_from_url(data: Dict = Body(...)):
+        """
+        Preview first 20 rows of a CSV or Excel file from a URL.
+
+        Returns the data without processing/cleaning it.
+
+        Expected JSON body:
+        {
+            "file_url": "https://...",
+            "filename": "data.xlsx" or "data.csv"
+        }
+        """
+        print("=" * 50, file=sys.stderr)
+        print("Previewing File from URL", file=sys.stderr)
+        print("=" * 50, file=sys.stderr)
+
+        temp_input_path = None
+
+        try:
+            # Step 1: Validate request
+            file_url, filename = processor.validator.validate_request_data(data)
+
+            print(f"File URL: {file_url}", file=sys.stderr)
+            print(f"Filename: {filename}", file=sys.stderr)
+
+            # Step 2: Download file
+            file_content = processor.loader.download_file(file_url)
+
+            # Step 3: Validate file type
+            file_type = processor.validator.validate_file_type(filename)
+            is_csv = processor.validator.is_csv_file(filename)
+            print(f"✓ File type validated: {file_type}", file=sys.stderr)
+
+            # Step 4: Save to temp
+            temp_input_path = file_manager.save_temp_input_file(file_content, filename)
+
+            # Free memory
+            del file_content
+            gc.collect()
+
+            # Step 5: Load file
+            df, engine_used = processor.loader.load_file(temp_input_path, filename, is_csv)
+
+            total_rows = len(df)
+            total_columns = len(df.columns)
+            print(f"✓ Loaded {total_rows:,} rows × {total_columns} cols", file=sys.stderr)
+
+            # Get first 20 rows
+            preview_rows = min(20, total_rows)
+            df_preview = df.head(preview_rows)
+
+            # Convert DataFrame to JSON-friendly format
+            # Using orient='records' converts to list of dictionaries
+            preview_data = df_preview.to_dict(orient='records')
+            columns = df_preview.columns.tolist()
+
+            print(f"✓ Returning preview of {preview_rows} rows", file=sys.stderr)
+            print("=" * 50, file=sys.stderr)
+
+            # Free memory
+            del df
+            del df_preview
+            gc.collect()
+
+            # Return JSON response with DataFrame preview
+            return JSONResponse(content={
+                "success": True,
+                "filename": filename,
+                "file_type": file_type,
+                "total_rows": total_rows,
+                "total_columns": total_columns,
+                "preview_rows": preview_rows,
+                "columns": columns,
+                "data": preview_data,  # List of dictionaries, one per row
+                "engine_used": engine_used
+            })
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"ERROR previewing file: {str(e)}", file=sys.stderr)
+            import traceback
+            print(traceback.format_exc(), file=sys.stderr)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Preview error: {str(e)}"
+            )
+
+        finally:
+            # Always clean up temp file
+            if temp_input_path:
+                file_manager.delete_temp_file(temp_input_path)
+
     @router.get("/storage-info")
     def storage_info():
         """
