@@ -298,13 +298,13 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             total_columns = len(df.columns)
             print(f"✓ Loaded {total_rows:,} rows × {total_columns} cols", file=sys.stderr)
 
-            # Get first 20 rows
-            preview_rows = min(20, total_rows)
+            # Get first 10 rows
+            preview_rows = min(10, total_rows)
             df_preview = df.head(preview_rows)
 
             # Convert DataFrame to the requested format
             columns = df_preview.columns.tolist()
-            rows = df_preview.values.tolist()  # Convert to list of lists
+            rows_data = df_preview.values.tolist()  # Convert to list of lists
 
             print(f"✓ Returning preview of {preview_rows} rows", file=sys.stderr)
             print("=" * 50, file=sys.stderr)
@@ -314,18 +314,24 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             del df_preview
             gc.collect()
 
-            # Return JSON response with DataFrame preview
-            return JSONResponse(content={
+            # Build response with separate row_1, row_2, etc.
+            response_content = {
                 "success": True,
                 "filename": filename,
                 "file_type": file_type,
                 "total_rows": total_rows,
                 "total_columns": total_columns,
                 "preview_rows": preview_rows,
-                "columns": columns,  # Array of column names
-                "rows": rows,  # Array of arrays (each row is an array of values)
+                "columns": columns,
                 "engine_used": engine_used
-            })
+            }
+
+            # Add individual rows as row_1, row_2, etc.
+            for i, row in enumerate(rows_data, start=1):
+                response_content[f"row_{i}"] = row
+
+            # Return JSON response with DataFrame preview
+            return JSONResponse(content=response_content)
 
         except HTTPException:
             raise
