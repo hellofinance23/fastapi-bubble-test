@@ -298,10 +298,41 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             total_columns = len(df.columns)
             print(f"✓ Loaded {total_rows:,} rows × {total_columns} cols", file=sys.stderr)
 
-            # Get first 10 rows
-            max_rows = 10
+            # Get first 5 rows and 5 columns
+            max_rows = 5
+            max_cols = 5
             preview_rows = min(max_rows, total_rows)
-            df_preview = df.head(max_rows)
+            preview_cols = min(max_cols, total_columns)
+
+            # Limit to first 5 columns and 5 rows
+            df_preview = df.iloc[:max_rows, :max_cols]
+
+            # Helper function to format cell values
+            def format_cell_value(value):
+                """Format cell values: round numbers, brackets for negatives, dashes for zeros"""
+                if value is None or (isinstance(value, str) and value.strip() == ''):
+                    return ''
+
+                # Try to convert to number
+                try:
+                    num = float(str(value).replace(',', ''))
+
+                    # Round to nearest whole number
+                    rounded = round(num)
+
+                    # Zero as dash
+                    if rounded == 0:
+                        return '-'
+
+                    # Negative numbers with brackets
+                    if rounded < 0:
+                        return f"({abs(rounded):,.0f})"
+
+                    # Positive numbers with comma formatting
+                    return f"{rounded:,.0f}"
+                except (ValueError, TypeError):
+                    # Not a number, return as-is
+                    return str(value)
 
             # Generate HTML table
             html = "<table border='1' style='border-collapse:collapse;width:100%'>"
@@ -317,11 +348,12 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
             for _, row in df_preview.iterrows():
                 html += "<tr>"
                 for value in row:
-                    html += f"<td style='padding:6px'>{value}</td>"
+                    formatted_value = format_cell_value(value)
+                    html += f"<td style='padding:6px'>{formatted_value}</td>"
                 html += "</tr>"
             html += "</tbody></table>"
 
-            print(f"✓ Returning HTML table preview of {preview_rows} rows", file=sys.stderr)
+            print(f"✓ Returning HTML table preview of {preview_rows} rows × {preview_cols} cols", file=sys.stderr)
             print("=" * 50, file=sys.stderr)
 
             # Free memory
