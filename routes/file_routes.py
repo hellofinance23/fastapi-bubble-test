@@ -10,6 +10,7 @@ from typing import Dict
 import sys
 import time
 import gc
+import html
 
 from validations.file_validator import FileValidator
 from utils.file_loader import FileLoader
@@ -334,24 +335,26 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
                     # Not a number, return as-is
                     return str(value)
 
-            # Generate HTML table
-            html = "<table border='1' style='border-collapse:collapse;width:100%'>"
+            # Generate HTML table (with XSS protection)
+            html_output = "<table border='1' style='border-collapse:collapse;width:100%'>"
 
-            # Header
-            html += "<thead><tr>"
+            # Header - escape column names to prevent XSS
+            html_output += "<thead><tr>"
             for col in df_preview.columns:
-                html += f"<th style='padding:6px;background:#f4f4f4'>{col}</th>"
-            html += "</tr></thead>"
+                escaped_col = html.escape(str(col))
+                html_output += f"<th style='padding:6px;background:#f4f4f4'>{escaped_col}</th>"
+            html_output += "</tr></thead>"
 
-            # Body
-            html += "<tbody>"
+            # Body - escape all cell values to prevent XSS
+            html_output += "<tbody>"
             for _, row in df_preview.iterrows():
-                html += "<tr>"
+                html_output += "<tr>"
                 for value in row:
                     formatted_value = format_cell_value(value)
-                    html += f"<td style='padding:6px'>{formatted_value}</td>"
-                html += "</tr>"
-            html += "</tbody></table>"
+                    escaped_value = html.escape(str(formatted_value))
+                    html_output += f"<td style='padding:6px'>{escaped_value}</td>"
+                html_output += "</tr>"
+            html_output += "</tbody></table>"
 
             print(f"✓ Returning HTML table preview of {preview_rows} rows × {preview_cols} cols", file=sys.stderr)
             print("=" * 50, file=sys.stderr)
@@ -369,7 +372,7 @@ def create_routes(file_manager: FileManager, railway_public_url: str) -> APIRout
                 "total_rows": total_rows,
                 "total_columns": total_columns,
                 "preview_rows": preview_rows,
-                "html_table": html,
+                "html_table": html_output,
                 "engine_used": engine_used
             })
 
