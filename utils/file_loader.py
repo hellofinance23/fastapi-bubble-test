@@ -138,6 +138,8 @@ class FileLoader:
         - .xls files (uses xlrd)
         - .xlsb files (uses pyxlsb)
 
+        Automatically skips blank rows at the top to find correct headers.
+
         Args:
             file_path: Path to the Excel file
             filename: Original filename to determine format
@@ -150,41 +152,54 @@ class FileLoader:
         """
         filename_lower = filename.lower()
 
+        # First, read without header to detect blank rows
         if filename_lower.endswith('.xlsx'):
             print("  Using openpyxl engine...", file=sys.stderr)
-            df = pd.read_excel(
-                file_path,
-                engine='openpyxl',
-                dtype=str,
-                skip_blank_lines=True  # Skip empty rows before loading
-            )
+            engine = 'openpyxl'
             engine_used = "Excel (openpyxl)"
-
         elif filename_lower.endswith('.xls'):
             print("  Using xlrd engine...", file=sys.stderr)
-            df = pd.read_excel(
-                file_path,
-                engine='xlrd',
-                dtype=str,
-                skip_blank_lines=True  # Skip empty rows before loading
-            )
+            engine = 'xlrd'
             engine_used = "Excel (xlrd)"
-
         elif filename_lower.endswith('.xlsb'):
             print("  Using pyxlsb engine...", file=sys.stderr)
-            df = pd.read_excel(
-                file_path,
-                engine='pyxlsb',
-                dtype=str,
-                skip_blank_lines=True  # Skip empty rows before loading
-            )
+            engine = 'pyxlsb'
             engine_used = "Excel (pyxlsb)"
-
         else:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported Excel format: {filename}"
             )
+
+        # Read first few rows to find where data starts
+        df_preview = pd.read_excel(
+            file_path,
+            engine=engine,
+            dtype=str,
+            nrows=100,  # Read first 100 rows to find header
+            header=None  # Don't treat first row as header yet
+        )
+
+        # Find first non-empty row (where actual headers are)
+        skip_rows = 0
+        for idx, row in df_preview.iterrows():
+            # Check if row is completely empty (all NaN or all empty strings)
+            if row.isna().all() or (row.astype(str).str.strip() == '').all():
+                skip_rows += 1
+            else:
+                # Found first non-empty row - this is the header
+                break
+
+        if skip_rows > 0:
+            print(f"  Skipping {skip_rows} blank rows at top", file=sys.stderr)
+
+        # Now read the file properly, skipping blank rows
+        df = pd.read_excel(
+            file_path,
+            engine=engine,
+            dtype=str,
+            skiprows=skip_rows  # Skip blank rows before header
+        )
 
         return df, engine_used
 
